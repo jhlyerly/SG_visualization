@@ -1,0 +1,269 @@
+---
+title: "Sungrains graphs observed vs predicted measures"
+author: "Jeanette Lyerly"
+date: "10/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(plyr)
+library(tidyverse)
+library(ggrepel)
+library(grid)
+library(knitr)
+library(gridExtra)
+library(kableExtra)
+library(here)
+```
+
+The purpose of this script is to create a shareable document for generating the observed measure vs predicted measure graphs for Sungrains. Multiple options for creating graphs will be included.
+
+The example data is yield in bu/ac for three locations and predicted yield based on data from two mega-environments.
+
+#### Data import
+
+Data is imported as a csv file. 
+All columns have headers with no spaces.
+All missing values are coded as NA (no blanks).
+
+
+```{r}
+example_data <- read_csv("wheat_obs_pred_example_data.csv", guess_max = 10000, na = c("NA", ""))
+
+glimpse(example_data)
+
+```
+
+### Counts by quadrant graphs for selected locations and training populations
+
+The following section will generate the corresponding graphs as you move through combinations of x and y.
+You can use all the same combinations, or adjust here to only look at the most interesting/informative ones.
+
+Note that:  
+The dashed lines represent the parameter you select (mean here, but can choose any).  
+The colors represent the quadrants.  
+The A, B, C, D represent the data point in relation to the selected parameter(s).  
+A = measurement is greater or equal to the parameter for x(Pred) and y(Obs)  
+B = measurement is less than the parameter for x(Pred) and y(Obs)  
+C = measurement is greater than or equal to the parameter for x(Pred) and less than the parameter for y(Obs)  
+D = measurement is less than the parameter for x(Pred) and greater than or equal to the parameter for y(Obs)  
+NA = missing data (either the field data or the prediction is missing in that pair)  
+Any measure could be included here, the mean is a convenient starting point.  
+
+Set some figure options.
+
+```{r}
+knitr::opts_chunk$set(fig.width = 8, fig.height = 8)
+```
+
+Set up the observed and predicted data.  
+Remember to set the parameter functions as needed.  
+Each graph is automatically saved. To not do this, comment out the ggsave line.
+
+#### Yield example
+
+```{r, warning=FALSE}
+#generates plots as you go - can use any lists of x and y
+#note that there are two places to modify the function here - in the param calculation, and in the geom_hline and geom_vline
+
+#put the name of the data set in the data title
+data_title <- "WHEAT 2020" #CHANGE
+
+#set x and y
+x_trait <- c("Pred_Yield_ME1", "Pred_Yield_ME2") #CHANGE - list of x
+y_trait <- c("Obs_Yield_LOC1", "Obs_Yield_LOC2", "Obs_Yield_LOC3") #CHANGE - list of y
+
+df <- example_data %>% select(Genotype, all_of(y_trait), all_of(x_trait)) #get the data for x and y
+
+for (j in 1:length(y_trait)) {
+  for (i in 1:length(x_trait)) {
+    mydf <- as.data.frame(df)
+    myfunx <- mean #the function you want to use as the parameter for x
+    myfuny <- mean #the function you want to use as the parameter for y
+    x <- mydf[,x_trait[i]] #x axis data (predictions)
+    y <- mydf[,y_trait[j]] #y axis data (observed)
+    param_x <- myfunx(x, na.rm = T) #change to the needed function
+    param_y <- myfuny(y, na.rm = T) #change to the needed function
+    mycor <- round(cor(x,y, method = c("pearson"), use = "pairwise.complete.obs"), digits = 3)
+    mycor_text <- paste("Corr = ", mycor)
+    mydf <- mydf %>% mutate(., param = ifelse(x >= param_x & y >= param_y, "A", 
+                                ifelse(x < param_x & y < param_y, "B", 
+                                ifelse(x >= param_x & y < param_y, "C", 
+                                ifelse(x < param_x & y >= param_y, "D", "NA")))))
+    counts <- table(mydf$param, useNA = "always") #generate counts for the plot legend
+    labels <- paste(names(counts), counts, sep=":") #generate labels for the plot legend
+    #make plots
+    plot <- ggplot(mydf, aes(x, y)) +
+    theme_classic() +
+    geom_point(aes(color = param), 
+               alpha = 1, 
+               size = 2, 
+               show.legend = T) +
+    geom_hline(yintercept = myfuny(y, na.rm = T), color = "gray20", linetype = 2) +
+    geom_vline(xintercept = myfunx(x, na.rm = T), color = "gray20", linetype = 2) +
+    labs(title = data_title, x = x_trait[i], y = y_trait[j]) +
+    scale_color_discrete(name ="Groups:Counts", labels = labels) +
+    annotate("text", x = min(x, na.rm = T) + 1.5, y = max(y, na.rm = T) - 1, label = mycor_text)
+  
+    print(plot)
+    #if you have multiple traits in the y_trait set, change y_trait below to y_trait[j]
+    ggsave(plot, file = paste0("plots", y_trait[j], "-", x_trait[i], ".pdf"), height = 8, width = 8)
+    
+    mydf <- mydf %>% rename_at(vars(contains("param")), list(~paste(y_trait[j], x_trait[i], sep = ".")))
+    df <- mydf
+  }
+}
+
+```
+
+### Graphs for observed and predicted measures with mean and std dev
+
+We also create graphs where the colors represent the standard deviation from the mean. The chunks below will generate these graphs. The labels can be updated to whatever is needed. For simplicity these are considered here as very good, good, bad, and very bad.   
+
+#### Define some functions
+
+Calculate the statistics used in each plot including the mean, sd, min, max, etc.   
+Clear the environment after each plot code chunk to avoid confusion if you are creating multiple plots.   
+Calculate the groupings using the mean and sd based on a given x and y.   
+
+```{r}
+#this function calculates the basic stats for selected x and y
+fun.calculate.stats <- function(x, y) {
+  mean_x = mean(x, na.rm = T)
+  mean_y = mean(y, na.rm = T)
+  min_x = min(x, na.rm = T)
+  max_y = max(y, na.rm = T)
+  sd_x = sd(x, na.rm = T)
+  sd_y = sd(y, na.rm = T)
+  Q3_x = mean_x + sd_x
+  Q3_y = mean_y + sd_y
+  Q1_x = mean_x - sd_x
+  Q1_y = mean_y - sd_y
+  corr_work_data = round(cor(x,y, method = c("pearson"), use = "pairwise.complete.obs"), digits = 3)
+  return_list <- list(
+    "mean_x" = mean_x,
+    "mean_y" = mean_y,
+    "min_x" = min_x,
+    "max_y" = max_y,
+    "sd_x" = sd_x,
+    "sd_y" = sd_y,
+    "Q3_x" = Q3_x,
+    "Q3_y" = Q3_y,
+    "Q1_x" = Q1_x,
+    "Q1_y" = Q1_y,
+    "corr_work_data" = corr_work_data)
+  return(return_list)
+}
+
+#this function removes the stats from the global environment
+fun.CleanEnvir <- function() {
+    rm(list = c("data_title", "x", "y", "x_trait", "y_trait", "x_label", "y_label", "mean_x", "mean_y", "min_x", "max_y", "sd_x", "sd_y", "Q3_x", "Q3_y", "Q1_x", "Q1_y", "corr_work_data", "out", "best", "worst", "which_best", "which_worst", "my_text"), pos = ".GlobalEnv")
+}
+
+#this function generates groupings using the mean and sd output from calculate.stats
+#this function uses requires the data frame, x, and y
+#in this function high values are good (yield, test weight)
+fun.generate.groups1 <- function(df, x, y) {
+  out <- fun.calculate.stats(x, y)
+  mean_x = as.numeric(out[1])
+  mean_y = as.numeric(out[2])
+  Q1_x = as.numeric(out[9])
+  Q1_y = as.numeric(out[10])
+  Q3_x = as.numeric(out[7])
+  Q3_y = as.numeric(out[8])
+  df$cond2 <- NA
+  df$cond2[which(x > Q3_x & y > Q3_y)] <- "PredVG_ObsVG"
+  df$cond2[which((between(x, mean_x, Q3_x)) & (between(y, mean_y, Q3_y)))] <- "PredG_ObsG"
+  df$cond2[which(x < Q1_x & y < Q1_y)] <- "PredVB_ObsVB" 
+  df$cond2[which((between(x, Q1_x, mean_x)) & (between(y, Q1_y, mean_y)))] <- "PredB_ObsB" 
+  df$cond2[which((between(x, Q1_x, mean_x)) & (y < Q1_y))] <- "PredB_ObsVB" 
+  df$cond2[which((x < Q1_x) & (between(y, Q1_y, mean_y)))] <- "PredVB_ObsB" 
+  df$cond2[which((between(x, mean_x, Q3_x)) & (y > Q3_y))] <- "PredG_ObsVG" 
+  df$cond2[which((x > Q3_x) & (between(y, mean_y, Q3_y)))] <- "PredVG_ObsG" 
+  df$cond2[which((between(x, mean_x, Q3_x)) & (between(y, Q1_y, mean_y)))] <- "PredG_ObsB" 
+  df$cond2[which((between(x, mean_x, Q3_x)) & (y < Q1_y))] <- "PredG_ObsVB" 
+  df$cond2[which((Q3_x < x) & (between(y, Q1_y, mean_y)))] <- "PredVG_ObsB" 
+  df$cond2[which((Q3_x < x) & (y < Q1_y))] <- "PredVG_ObsVB" 
+  df$cond2[which((x < Q1_x) & (between(y, mean_y, Q3_y)))] <- "PredVB_ObsG" 
+  df$cond2[which((between(x, Q1_x, mean_x)) & (y > Q3_y))] <- "PredB_ObsVG" 
+  df$cond2[which((x < Q1_x) & (y > Q3_y))] <- "PredVB_ObsVG" 
+  df$cond2[which((between(x, Q1_x, mean_x)) & (between(y, mean_y, Q3_y)))] <- "PredB_ObsG" 
+return(df)
+}
+
+```
+
+Select the observed and predicted variables that you want for x and y.  
+In the graphs below, dashed lines represent the mean; colors represent standard deviations from the mean.   
+Points can be labeled with line names if you want to identify things that are predicted well, predicted poorly, etc.   
+
+#### Yield example
+
+```{r, results="hide", fig.height=8, fig.width=8}
+#use results="hide" to run the code but not display the result from lapply
+work_data <- as.data.frame(example_data)
+
+#select variables for x and y 
+data_title <- "WHEAT 2020" #CHANGE
+x_trait <- "Pred_Yield_ME1" #CHANGE
+y_trait <- "Obs_Yield_LOC1" #CHANGE
+
+x <- work_data[, x_trait] #x axis data goes here (predictions)
+y <- work_data[, y_trait] #y axis data goes here (observed)
+
+x_label <- colnames(work_data)[match(x_trait,names(work_data))] #this is the column label with the x axis data
+y_label <- colnames(work_data)[match(y_trait,names(work_data))] #this is the column label with the y axis data
+
+out <- fun.calculate.stats(x, y)
+#need to send the output from the function to the environment so you can use the variables
+lapply(seq_along(out), function(i) assign(names(out)[i], out[[i]], envir = .GlobalEnv))
+
+my_text <- paste("Corr = ", corr_work_data) #add the correlation as text if desired
+
+work_data <- fun.generate.groups1(work_data, work_data[[x_trait]], work_data[[y_trait]])
+table(work_data$cond2) #look at the table to determine which groups you want to include as the "worst" or "best" for labeling
+
+#make a plot with these groupings, assign a color to each group, highlight the selections
+gg1 <- ggplot(work_data, aes(x, y)) +
+  theme_classic() +
+  theme(text = element_text(colour = "black", size = 12), aspect.ratio = 1) + 
+  geom_point(aes(color = cond2), alpha = 1, size = 2, show.legend = F) +
+  scale_x_continuous(breaks = pretty(x, n = 5)) +
+  scale_y_continuous(breaks = pretty(y, n = 5)) +
+  geom_hline(yintercept = mean(y, na.rm = T), color = "gray20", linetype = 2) +
+  geom_vline(xintercept = mean(x, na.rm = T), color = "gray20", linetype = 2) +
+  labs(x = x_label, y = y_label, title = data_title, color = "Group", subtitle = "dashed lines = mean, colors = sd") +
+  theme(plot.title = element_text(size=14, face="bold", hjust = 0.5)) +
+  theme(axis.title.x = element_text(size=14, face="bold")) +
+  theme(axis.title.y = element_text(size=14, face="bold"))
+gg1
+
+worst <- work_data[work_data$cond2 %in% c("PredVB_ObsVG", "PredVB_ObsG"),] #these are the "worst" mistakes that you want to look at, where predictions are farthest off from observed or vice versa
+which_worst <- worst$Genotype #get the varieties in these groups
+which_worst
+
+best <- work_data[work_data$cond2 %in% c("PredVG_ObsVG", "PredVG_ObsG"),]
+which_best <- best$Genotype #get the varieties in these groups
+which_best
+
+#label the specific points by genotype and add the correlation value to the plot; may need to adjust the x and y nudge values to make the labels look better
+p1 <- gg1 + 
+  geom_text_repel(aes(label=ifelse(Genotype %in% worst$Genotype, as.character(Genotype),'')), nudge_x = 0.5, nudge_y = 0.2, direction = "y") + 
+  geom_text_repel(aes(label=ifelse(Genotype %in% best$Genotype, as.character(Genotype),'')), nudge_x = 0.5, nudge_y = 0.2, direction = "y") +
+  annotate("text", x = min_x + 1, y = max_y - 1, label = my_text)
+p1
+
+ggsave(p1, file = "plotsObsLOC1_PredME1_yield_label.pdf", height = 10, width = 8)
+
+
+fun.CleanEnvir()
+
+```
+
+Session
+
+```{r}
+sessionInfo()
+```
